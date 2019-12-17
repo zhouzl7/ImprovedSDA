@@ -49,24 +49,23 @@ def get_skewed_F_measure(X1, X2, h1, h2, alpha):
 
 
 # done!
-def get_H1_H2_for_I_SDA(X1, X2):
+def get_H1_H2_for_I_SDA(X1, X2, minSizeOfSubclass):
     n1 = len(X1)
     n2 = len(X2)
     H1 = 0
     H2 = 0
     skewedFMeasure = -1
-    h1 = 2
-    while h1 * 2 <= n1:
-        if n1 % h1 != 0:
-            h1 = h1 + 1
-        else:
-            h2 = round(n2 / (n1 / h1))
-            sf = get_skewed_F_measure(X1, X2, h1, h2, 4)
-            if skewedFMeasure < sf:
-                skewedFMeasure = sf
-                H1 = h1
-                H2 = h2
-            h1 = h1 + 1
+    subSize = minSizeOfSubclass
+    while subSize*2 <= n1 and subSize*2 <= n2:
+        h1 = round(n1 / subSize)
+        h2 = round(n2 / subSize)
+        sf = get_skewed_F_measure(X1, X2, h1, h2, 4)
+        if skewedFMeasure < sf:
+            skewedFMeasure = sf
+            H1 = h1
+            H2 = h2
+        print(('h1 = %d' % h1, 'subSize1 = %d' % (n1/h1)), ('h2 = %d' % h2, 'subSize2 = %d' % (n2/h2)), 'sf = %f' % sf)
+        subSize = subSize + 1
     return H1, H2
 
 
@@ -161,14 +160,24 @@ def get_sumX(X1, X2, n1, n2):
     return sum_X
 
 
-# TODO
+# done!
 def get_V(sumB, sumX):
-    V = np.array([])
-    return V
+    sumX_inv = np.linalg.pinv(sumX)
+    dot = np.dot(sumX_inv, sumB)
+    w, v = np.linalg.eig(dot)
+    v = v.T
+    len_w = len(w)
+    V = []
+    for i in range(len_w):
+        if w[i] != 0:
+            V.append(v[1])
+    return np.real(np.array(V))
 
 
 # done!
 def get_label_of_y(X1, X2, h1, h2, y):
+    if len(y.shape) == 1:
+        y = np.array([y.tolist()])
     n1 = len(X1)
     n2 = len(X2)
     # step 2
@@ -187,8 +196,8 @@ def get_label_of_y(X1, X2, h1, h2, y):
     labels2 = np.zeros(n2, dtype='i4')
     labels = np.concatenate((labels1, labels2), axis=0)
     rf = RandomForestClassifier()
-    rf.fit(X_f, labels)
-    predictions = rf.predict(y_f)
+    rf.fit(X_f.T, labels)
+    predictions = rf.predict(y_f.T)
     return predictions
 
 
@@ -210,7 +219,7 @@ def kernel(X1, X2, ker='primal', gamma=1):
     return K
 
 
-def SSTCA(Xs, Xt, kernel_type='primal', dim=30, lamb=1, gamma=1):
+def TCA(Xs, Xt, kernel_type='primal', dim=16, lamb=1, gamma=1):
     """
     Transform Xs and Xt
     :param gamma: kernel bandwidth for rbf kernel
@@ -236,50 +245,53 @@ def SSTCA(Xs, Xt, kernel_type='primal', dim=30, lamb=1, gamma=1):
     ind = np.argsort(w)
     A = V[:, ind[:dim]]
     Z = np.dot(A.T, K)
-    Z /= np.linalg.norm(Z, axis=0)
+    Z = Z / np.linalg.norm(Z, axis=0)
     Xs_new, Xt_new = Z[:, :ns].T, Z[:, ns:].T
     return Xs_new, Xt_new
-    return S, T
 
 
 # done!
-def within_project_ISDA(X1, X2, y):
+def within_project_ISDA(X1, X2, y, minSizeOfSubclass):
     n1 = len(X1)
     n2 = len(X2)
+    print(('n1 = %d' % n1, 'n2 = %d' % n2))
     # step 1
-    H1, H2 = get_H1_H2_for_I_SDA(X1, X2)
+    H1, H2 = get_H1_H2_for_I_SDA(X1, X2, minSizeOfSubclass)
+    print(('H1 = %d' % H1, 'subSize1 = %d' % (n1/H1)), ('H2 = %d' % H2, 'subSize2 = %d' % (n2/H2)))
     # step 2 - 6
     predictions = get_label_of_y(X1, X2, H1, H2, y)
     return predictions
 
 
 # done!
-def cross_project_SSTCA_ISDA(Xs1, Xs2, Xt):
+def cross_project_SSTCA_ISDA(Xs1, Xs2, Xt, minSizeOfSubclass):
     n1 = len(Xs1)
     n2 = len(Xs2)
     Xs = np.vstack((Xs1, Xs2))
     # step 1
-    Xs_new, Xt_new = SSTCA(Xs, Xt)
+    Xs_new, Xt_new = TCA(Xs, Xt)
     Xs_new1 = Xs_new[: n1]
     Xs_new2 = Xs_new[n1: n1+n2]
     # step 2 - 3
-    predictions = within_project_ISDA(Xs_new1, Xs_new2, Xt)
+    predictions = within_project_ISDA(Xs_new1, Xs_new2, Xt, minSizeOfSubclass)
     return predictions
 
 
 class ImprovedSDA:
-    def __init__(self, X1, X2, Xt):
+    def __init__(self, X1, X2, Xt, minSizeOfSubclass):
         """
         :param X1: n1 * n_feature, defective instances
         :param X2: n2 * n_feature, defect-free instances
         :param Xt: nt * n_feature, unlabeled instances
+        :param minSizeOfSubclass:
         """
         self.X1 = X1
         self.X2 = X2
         self.Xt = Xt
+        self.minSizeOfSubclass = minSizeOfSubclass
 
     def within_predict(self):
-        return within_project_ISDA(self.X1, self.X2, self.Xt)
+        return within_project_ISDA(self.X1, self.X2, self.Xt, self.minSizeOfSubclass)
 
     def cross_predict(self):
-        return cross_project_SSTCA_ISDA(self.X1, self.X2, self.Xt)
+        return cross_project_SSTCA_ISDA(self.X1, self.X2, self.Xt, self.minSizeOfSubclass)
