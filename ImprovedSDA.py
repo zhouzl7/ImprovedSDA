@@ -1,13 +1,10 @@
 import LoadData
 import Global
 import numpy as np
-
-
-def get_label_of_y(X1, X2, h1, h2, y):
-    subX1, subX2 = NNC(X1, X2, h1, h2)
-    # TODO: step 3 - 6
-
-    return Global.POSITIVE
+from sklearn.ensemble import RandomForestClassifier
+import sklearn.metrics
+import scipy.io
+import scipy.linalg
 
 
 # done!
@@ -118,17 +115,6 @@ def sort_for_nnc(X):
 
 
 # done!
-# def divide_to_subclass(X, H):
-#     X = X.tolist()
-#     n = len(X)
-#     subX = []
-#     for i in range(H):
-#         one_subX = X[int(i*n/H): int((i+1)*n/H)]
-#         subX.append(one_subX)
-#     return np.array(subX)
-
-
-# done!
 def NNC(X1, X2, H1, H2):
     sortedX1 = sort_for_nnc(X1)
     sortedX2 = sort_for_nnc(X2)
@@ -153,7 +139,7 @@ def get_sumB(subX1, subX2, n1, n2):
             u_2j = np.mean(subX2[j], axis=0)
             u_2j = np.array([u_2j.tolist()])
             gap = u_1i-u_2j
-            sum_B = sum_B + (p_1i * p_2j * np.dot(gap.T, gap))
+            sum_B = sum_B + (p_1i * p_2j * np.dot(gap.T, gap))  # different with the paper
     return sum_B
 
 
@@ -167,32 +153,133 @@ def get_sumX(X1, X2, n1, n2):
     for i in range(n1):
         x = np.array([X1[i].tolist()])
         gap = x - u
-        sum_X = sum_X + np.dot(gap, gap.T)
+        sum_X = sum_X + np.dot(gap, gap.T)  # different with the paper
     for i in range(n2):
         x = np.array([X2[i].tolist()])
         gap = x - u
-        sum_X = sum_X + np.dot(gap.T, gap)
+        sum_X = sum_X + np.dot(gap.T, gap)  # different with the paper
     return sum_X
 
 
-def improved_SDA(X1, X2, y):
+# TODO
+def get_V(sumB, sumX):
+    V = np.array([])
+    return V
+
+
+# done!
+def get_label_of_y(X1, X2, h1, h2, y):
     n1 = len(X1)
     n2 = len(X2)
-    H1, H2 = get_H1_H2_for_I_SDA(X1, X2)
-    subX1, subX2 = NNC(X1, X2, H1, H2)
+    # step 2
+    subX1, subX2 = NNC(X1, X2, h1, h2)
+    # step 3
     sum_B = get_sumB(subX1, subX2, n1, n2)
     sum_X = get_sumX(X1, X2, n1, n2)
-    # TODO: step 4 - 6
+    # step 4
+    V = get_V(sum_B, sum_X)
+    # step 5
+    X = np.concatenate((X1, X2), axis=0)
+    X_f = np.dot(V.T, X.T)  # different with the paper
+    y_f = np.dot(V.T, y.T)  # different with the paper
+    # step 6
+    labels1 = np.ones(n1, dtype='i4')
+    labels2 = np.zeros(n2, dtype='i4')
+    labels = np.concatenate((labels1, labels2), axis=0)
+    rf = RandomForestClassifier()
+    rf.fit(X_f, labels)
+    predictions = rf.predict(y_f)
+    return predictions
 
-    return Global.POSITIVE
+
+# done!
+def kernel(X1, X2, ker='primal', gamma=1):
+    K = None
+    if not ker or ker == 'primal':
+        K = X1
+    elif ker == 'linear':
+        if X2 is not None:
+            K = sklearn.metrics.pairwise.linear_kernel(np.asarray(X1).T, np.asarray(X2).T)
+        else:
+            K = sklearn.metrics.pairwise.linear_kernel(np.asarray(X1).T)
+    elif ker == 'rbf':
+        if X2 is not None:
+            K = sklearn.metrics.pairwise.rbf_kernel(np.asarray(X1).T, np.asarray(X2).T, gamma)
+        else:
+            K = sklearn.metrics.pairwise.rbf_kernel(np.asarray(X1).T, None, gamma)
+    return K
 
 
-a = np.arange(1440).reshape((72, 20))
-print(a.shape)
-b = np.arange(600).reshape((30, 20))
-print(b.shape)
-subA, subB = NNC(a, b, 7, 3)
-sum_B = get_sumB(subA, subB, 72, 30)
-print(sum_B.shape)
-sum_X = get_sumX(a, b, 72, 30)
-print(sum_X.shape)
+def SSTCA(Xs, Xt, kernel_type='primal', dim=30, lamb=1, gamma=1):
+    """
+    Transform Xs and Xt
+    :param gamma: kernel bandwidth for rbf kernel
+    :param lamb: lambda value in equation
+    :param dim: dimension after transfer
+    :param kernel_type: kernel, values: 'primal' | 'linear' | 'rbf'
+    :param Xs: ns * n_feature, source feature
+    :param Xt: nt * n_feature, target feature
+    :return: Xs_new and Xt_new after TCA
+    """
+    X = np.hstack((Xs.T, Xt.T))
+    X = X / np.linalg.norm(X, axis=0)
+    m, n = X.shape
+    ns, nt = len(Xs), len(Xt)
+    e = np.vstack((1 / ns * np.ones((ns, 1)), -1 / nt * np.ones((nt, 1))))
+    M = e * e.T
+    M = M / np.linalg.norm(M, 'fro')
+    H = np.eye(n) - 1 / n * np.ones((n, n))
+    K = kernel(X, None, ker=kernel_type, gamma=gamma)
+    n_eye = m if kernel_type == 'primal' else n
+    a, b = np.linalg.multi_dot([K, M, K.T]) + lamb * np.eye(n_eye), np.linalg.multi_dot([K, H, K.T])
+    w, V = scipy.linalg.eig(a, b)
+    ind = np.argsort(w)
+    A = V[:, ind[:dim]]
+    Z = np.dot(A.T, K)
+    Z /= np.linalg.norm(Z, axis=0)
+    Xs_new, Xt_new = Z[:, :ns].T, Z[:, ns:].T
+    return Xs_new, Xt_new
+    return S, T
+
+
+# done!
+def within_project_ISDA(X1, X2, y):
+    n1 = len(X1)
+    n2 = len(X2)
+    # step 1
+    H1, H2 = get_H1_H2_for_I_SDA(X1, X2)
+    # step 2 - 6
+    predictions = get_label_of_y(X1, X2, H1, H2, y)
+    return predictions
+
+
+# done!
+def cross_project_SSTCA_ISDA(Xs1, Xs2, Xt):
+    n1 = len(Xs1)
+    n2 = len(Xs2)
+    Xs = np.vstack((Xs1, Xs2))
+    # step 1
+    Xs_new, Xt_new = SSTCA(Xs, Xt)
+    Xs_new1 = Xs_new[: n1]
+    Xs_new2 = Xs_new[n1: n1+n2]
+    # step 2 - 3
+    predictions = within_project_ISDA(Xs_new1, Xs_new2, Xt)
+    return predictions
+
+
+class ImprovedSDA:
+    def __init__(self, X1, X2, Xt):
+        """
+        :param X1: n1 * n_feature, defective instances
+        :param X2: n2 * n_feature, defect-free instances
+        :param Xt: nt * n_feature, unlabeled instances
+        """
+        self.X1 = X1
+        self.X2 = X2
+        self.Xt = Xt
+
+    def within_predict(self):
+        return within_project_ISDA(self.X1, self.X2, self.Xt)
+
+    def cross_predict(self):
+        return cross_project_SSTCA_ISDA(self.X1, self.X2, self.Xt)

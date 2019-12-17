@@ -22,4 +22,4 @@ def load_data(fileName):
     return X1, X2
 
 
-load_data(Global.FILE_NAME)
+# load_data(Global.FILE_NAME)
